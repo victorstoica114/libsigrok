@@ -1697,51 +1697,67 @@ static int receive_events(int fd, int revents, void *cb_data)
 }
 
 static int prepare_trigger(const struct sr_dev_inst *sdi,
-	uint8_t conditions[DLA_CHANNELS])
+	uint8_t conditions[DLA_CHANNELS], struct dla_parallel_trigger *parallel,
+	gboolean *advanced)
 {
 	const struct sr_trigger *trigger = sr_session_trigger_get(sdi->session);
+	const struct dev_context *devc = sdi->priv;
 	const struct sr_trigger_stage *stage;
 	const struct sr_trigger_match *match;
-	unsigned int condition;
+	const GSList *stage_node, *match_node;
+	unsigned int condition, stage_count, number = 0;
+	uint32_t seen;
 
 	memset(conditions, 0, DLA_CHANNELS);
+	memset(parallel, DLA_ADV_TRIGGER_DISABLED, sizeof(*parallel));
+	parallel->stages = 0;
+	*advanced = FALSE;
 	if (!trigger)
 		return SR_OK;
-	if (g_slist_length(trigger->stages) != 1) {
-		sr_err("DLA-32 supports one basic trigger stage, not advanced multi-stage triggers.");
+	stage_count = g_slist_length(trigger->stages);
+	if (!stage_count || stage_count > DLA_TRIGGER_STAGES) {
+		sr_err("DLA-32 supports one to sixteen trigger stages.");
 		return SR_ERR_NA;
 	}
 	stage = trigger->stages->data;
-	if (g_slist_length(stage->matches) != 1) {
-		sr_err("DLA-32 supports exactly one channel condition per trigger.");
+	*advanced = stage_count > 1 || g_slist_length(stage->matches) > 1;
+	if (*advanced && devc->stream) {
+		sr_err("Advanced DLA-32 triggers require Buffer mode.");
 		return SR_ERR_NA;
 	}
-	match = stage->matches->data;
-	if (!match->channel || match->channel->type != SR_CHANNEL_LOGIC ||
-			match->channel->index >= DLA_CHANNELS || !match->channel->enabled) {
-		sr_err("DLA-32 trigger must use one enabled logic channel.");
-		return SR_ERR_ARG;
+	for (stage_node = trigger->stages; stage_node; stage_node = stage_node->next, number++) {
+		stage = stage_node->data;
+		if (!stage->matches)
+			return SR_ERR_ARG;
+		seen = 0;
+		for (match_node = stage->matches; match_node; match_node = match_node->next) {
+			match = match_node->data;
+			if (!match->channel || match->channel->type != SR_CHANNEL_LOGIC ||
+					match->channel->index < 0 || match->channel->index >= DLA_CHANNELS ||
+					!match->channel->enabled || !g_slist_find(sdi->channels, match->channel)) {
+				sr_err("DLA-32 triggers require enabled logic channels of this device.");
+				return SR_ERR_ARG;
+			}
+			if (seen & (1U << match->channel->index)) {
+				sr_err("DLA-32 permits one condition per channel in each trigger stage.");
+				return SR_ERR_ARG;
+			}
+			seen |= 1U << match->channel->index;
+			switch (match->match) {
+			case SR_TRIGGER_RISING: condition = *advanced ? 3 : 1; break;
+			case SR_TRIGGER_ONE: condition = *advanced ? 1 : 2; break;
+			case SR_TRIGGER_FALLING: condition = *advanced ? 4 : 3; break;
+			case SR_TRIGGER_ZERO: condition = *advanced ? 0 : 4; break;
+			case SR_TRIGGER_EDGE: condition = 5; break;
+			default: return SR_ERR_NA;
+			}
+			if (*advanced)
+				parallel->conditions[number][match->channel->index] = condition;
+			else
+				conditions[match->channel->index] = condition;
+		}
 	}
-	switch (match->match) {
-	case SR_TRIGGER_RISING:
-		condition = 1;
-		break;
-	case SR_TRIGGER_ONE:
-		condition = 2;
-		break;
-	case SR_TRIGGER_FALLING:
-		condition = 3;
-		break;
-	case SR_TRIGGER_ZERO:
-		condition = 4;
-		break;
-	case SR_TRIGGER_EDGE:
-		condition = 5;
-		break;
-	default:
-		return SR_ERR_NA;
-	}
-	conditions[match->channel->index] = condition;
+	parallel->stages = *advanced ? stage_count : 0;
 	return SR_OK;
 }
 
@@ -1912,6 +1928,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
 	struct dla_setup_config setup;
+	struct dla_parallel_trigger parallel;
 	uint8_t conditions[DLA_CHANNELS], packet[DLA_COMMAND_SIZE];
 	uint64_t samples, maximum, first_data_msec, hardware_buffer_msec = 0;
 	uint64_t drain_total = 0;
@@ -1919,7 +1936,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	uint32_t mask;
 	int count, ret, i;
 	int64_t drain_deadline;
-	gboolean has_trigger, legacy_path;
+	gboolean has_trigger, legacy_path, advanced;
 
 #if defined(_WIN32) && DLA_WCH_WORKER
 	if (devc->wch_disconnected)
@@ -1948,7 +1965,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		return SR_ERR_ARG;
 	}
 	has_trigger = sr_session_trigger_get(sdi->session) != NULL;
-	ret = prepare_trigger(sdi, conditions);
+	ret = prepare_trigger(sdi, conditions, &parallel, &advanced);
 	if (ret != SR_OK)
 		return ret;
 	if (dla_decoder_init(&devc->decoder, mask, devc->stream) < 0)
@@ -2118,6 +2135,15 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		}
 		devc->transfer_submitted[i] = TRUE;
 		devc->submitted_transfers++;
+	}
+	if (advanced) {
+		ret = dla_parallel_trigger_config(packet, &parallel) < 0 ?
+			SR_ERR_ARG : send_command(sdi, packet);
+		if (ret != SR_OK) {
+			sr_err("Failed to configure the advanced trigger: %s.", sr_strerror(ret));
+			rollback_acquisition((struct sr_dev_inst *)sdi);
+			return ret;
+		}
 	}
 	if (legacy_path) {
 		dla_channels(packet);

@@ -77,6 +77,45 @@ struct dla_setup_config {
 	uint8_t buffer, mode, rle;
 };
 
+#define DLA_TRIGGER_STAGES 16
+#define DLA_ADV_TRIGGER_DISABLED 2
+
+/* Advanced parallel commands use a different condition encoding than 0x12:
+ * LOW/HIGH/disabled/rising/falling/either = 0..5. Count is an occurrence
+ * count for the tested edge conditions; continuous semantics remain pending.
+ */
+struct dla_parallel_trigger {
+	uint8_t stages;
+	uint8_t conditions[DLA_TRIGGER_STAGES][DLA_CHANNELS];
+};
+
+static inline int dla_parallel_trigger_config(uint8_t *out,
+	const struct dla_parallel_trigger *cfg)
+{
+	uint8_t body[304] = { 0x13, 0x2f, 0x01 };
+	unsigned int stage, pair, high, low;
+
+	if (!out || !cfg || !cfg->stages || cfg->stages > DLA_TRIGGER_STAGES)
+		return -1;
+	body[9] = cfg->stages;
+	for (stage = 0; stage < DLA_TRIGGER_STAGES; stage++) {
+		/* One occurrence per stage; do not expose unqualified extensions. */
+		body[0x20 + stage] = stage < cfg->stages ? 1 : 0;
+		for (pair = 0; pair < DLA_CHANNELS / 2; pair++) {
+			high = low = DLA_ADV_TRIGGER_DISABLED;
+			if (stage < cfg->stages) {
+				high = cfg->conditions[stage][31 - 2 * pair];
+				low = cfg->conditions[stage][30 - 2 * pair];
+				if (high > 5 || low > 5)
+					return -1;
+			}
+			body[0x30 + stage * 16 + pair] = (high << 4) | low;
+		}
+	}
+	dla_packet(out, body, sizeof(body));
+	return 0;
+}
+
 static inline void dla_setup_configure(uint8_t *out,
 	const struct dla_setup_config *cfg)
 {

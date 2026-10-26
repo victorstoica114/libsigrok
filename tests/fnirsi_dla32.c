@@ -198,6 +198,48 @@ START_TEST(test_portable_controls)
 }
 END_TEST
 
+START_TEST(test_advanced_parallel_trigger)
+{
+	struct dla_parallel_trigger cfg;
+	uint8_t packet[2048];
+	unsigned int stage;
+	/* Successful physical D28 rising AND D24 LOW command, encoded and
+	 * captured independently of this C implementation on 26 October 2026. */
+	const uint8_t conditions[] = {
+		0x22,0x23,0x22,0x20,0x22,0x22,0x22,0x22,
+		0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,
+	};
+
+	memset(&cfg, DLA_ADV_TRIGGER_DISABLED, sizeof(cfg));
+	cfg.stages = 1;
+	cfg.conditions[0][28] = 3;
+	cfg.conditions[0][24] = 0;
+	CHECK(dla_parallel_trigger_config(packet, &cfg) == 0);
+	CHECK(packet[8] == 0x0a && packet[9] == 0x13);
+	CHECK(packet[10] == 0x2f && packet[11] == 0x01);
+	CHECK(packet[18] == 1);
+	CHECK(packet[9 + 0x10] == 0 && packet[9 + 0x20] == 1);
+	CHECK(!memcmp(packet + 9 + 0x30, conditions, sizeof(conditions)));
+	CHECK(packet[313] == 0x0b && get32(packet + 314) == 0x6b3e467f);
+	for (stage = 1; stage < 16; stage++) {
+		CHECK(packet[9 + 0x20 + stage] == 0);
+		CHECK(packet[9 + 0x30 + stage * 16] == 0x22);
+	}
+	cfg.stages = 16;
+	cfg.conditions[0][31] = 4;
+	cfg.conditions[15][0] = 5;
+	CHECK(dla_parallel_trigger_config(packet, &cfg) == 0);
+	CHECK(packet[9 + 0x30] == 0x42);
+	CHECK(packet[9 + 0x12f] == 0x25);
+	cfg.stages = 0;
+	CHECK(dla_parallel_trigger_config(packet, &cfg) < 0);
+	cfg.stages = 17;
+	CHECK(dla_parallel_trigger_config(packet, &cfg) < 0);
+	cfg.stages = 1; cfg.conditions[0][31] = 6;
+	CHECK(dla_parallel_trigger_config(packet, &cfg) < 0);
+}
+END_TEST
+
 Suite *suite_fnirsi_dla32(void)
 {
 	Suite *s;
@@ -209,6 +251,7 @@ Suite *suite_fnirsi_dla32(void)
 	tcase_add_test(tc, test_threshold_encoding);
 	tcase_add_test(tc, test_pwm_dc_endpoints);
 	tcase_add_test(tc, test_portable_controls);
+	tcase_add_test(tc, test_advanced_parallel_trigger);
 	suite_add_tcase(s, tc);
 	return s;
 }
