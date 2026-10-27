@@ -66,9 +66,9 @@ The device configuration popup offers the Buffer pre-trigger capture ratio
 (1-90%) on either transport. The ratio is a hardware setting; it does not
 establish an exact calibrated trigger sample index.
 
-### Experimental advanced parallel trigger branch
+### Advanced parallel triggers
 
-This branch adds Buffer triggers with one to sixteen ordered libsigrok stages
+The driver supports Buffer triggers with one to sixteen ordered libsigrok stages
 and multiple enabled physical-channel conditions per stage. Conditions within
 a stage form a parallel AND condition. An unqualified stage with one condition
 retains the basic trigger implementation. Advanced combinations require Buffer; selecting
@@ -80,11 +80,11 @@ Ordinary stages default to one occurrence with continuous qualification disabled
 Optional Count/Continuous and serial-word matching are described below. Mixed
 conditions and the vendor serial Start/Stop controls remain under investigation.
 
-The separate PulseView `trigger-sequence-editor` branch provides the editor:
-<https://github.com/victorstoica114/pulseview/tree/trigger-sequence-editor>.
+This fork's companion PulseView `master` provides the editor:
+<https://github.com/victorstoica114/pulseview/tree/master>.
 It supports stage/condition editing and setup save/restore. Existing sigrok
 applications can also construct the sequence using the ordinary trigger API.
-This experimental branch is separate from the current upstream driver PR.
+These advanced extensions are separate from the current upstream driver PR.
 
 Windows/WCH validation includes the core/C++ tests, additional actual-driver
 mapping/lifecycle probes, positive/impossible-condition cases, two/sixteen
@@ -184,8 +184,8 @@ Known limits remain: arbitrary-duration lossless all32 Stream at 50 MS/s /
 200 MB/s is unqualified; high-rate waveform-width deviations remain recorded;
 exact physical trigger position is not qualified and no precise synthetic
 trigger marker is emitted. Advanced parallel stages are experimental in Buffer;
-serial matching and configurable Count/Continuous are available only on the
-experimental branch described below.
+serial matching and configurable Count/Continuous use the proposed API
+described below.
 A large interrupted export failed during temporary-file rename
 (EXP-001), and its cause remains unresolved. No filtering, sample repair,
 empirical duty correction or channel remapping is used to hide these findings.
@@ -196,12 +196,12 @@ not calibrated hysteresis/threshold specifications for every channel.
 
 ## Experimental trigger options
 
-The `advanced-trigger-buffer` branch additionally proposes
+This fork's `master` additionally proposes
 `SR_CONF_TRIGGER_OPTIONS` (`trigger_options`), using an `a{sv}` dictionary.
 This extends configuration without changing the public `sr_trigger` structures.
 It is a proposed API, separate from the existing upstream PR. Pair it with
-<https://github.com/victorstoica114/pulseview/tree/advanced-trigger-controls>
-for the experimental editor. Existing PulseView builds do not expose these fields.
+<https://github.com/victorstoica114/pulseview/tree/master>
+for the matching editor. Existing upstream PulseView builds do not expose these fields.
 
 SET replaces the complete dictionary. GET returns the commanded configuration;
 LIST describes the available modes and bounds. Invalid, unknown, duplicate or
