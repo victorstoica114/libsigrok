@@ -1750,8 +1750,9 @@ static int prepare_trigger(const struct sr_dev_inst *sdi,
 	if (devc->trigger_options.mode == DLA_TRIGGER_PARALLEL &&
 			devc->trigger_options.stages != stage_count)
 		return SR_ERR_ARG;
-	*advanced = devc->trigger_options.mode == DLA_TRIGGER_PARALLEL ||
-		stage_count > 1 || g_slist_length(stage->matches) > 1;
+	/* Standard 0x12 has one condition per physical channel and combines them
+	 * with AND. Only sequences and explicit qualifiers require 0x13. */
+	*advanced = devc->trigger_options.mode == DLA_TRIGGER_PARALLEL || stage_count > 1;
 	if (*advanced && devc->stream) {
 		sr_err("Advanced DLA-32 triggers require Buffer mode.");
 		return SR_ERR_NA;

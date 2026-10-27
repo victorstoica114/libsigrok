@@ -63,16 +63,21 @@ accuracy remains subject to the recorded qualification scope. On Linux these
 commands use libusb directly and do not require the FNIRSI application.
 
 The device configuration popup offers the Buffer pre-trigger capture ratio
-(1-90%) on either transport. The ratio is a hardware setting; it does not
-establish an exact calibrated trigger sample index.
+(1-90%) in Buffer mode on either transport. It is unavailable in Stream. The
+ratio is a hardware setting; it does not establish an exact calibrated trigger
+sample index.
 
-### Advanced parallel triggers
+### Standard AND and advanced parallel triggers
 
-The driver supports Buffer triggers with one to sixteen ordered libsigrok stages
-and multiple enabled physical-channel conditions per stage. Conditions within
-a stage form a parallel AND condition. An unqualified stage with one condition
-retains the basic trigger implementation. Advanced combinations require Buffer; selecting
-them in Stream returns an unsupported-mode error before acquisition starts.
+One ordinary libsigrok stage can combine conditions on multiple enabled
+physical channels with AND, using the standard 0x12 command in both Buffer and
+Stream. A stage can contain at most one condition for each physical channel.
+Multiple conditions alone do not require the advanced trigger engine.
+
+The driver also supports one to sixteen ordered stages in Buffer. Multiple
+stages, explicit Count/Continuous qualifiers and serial-word matching require
+the advanced engine. Selecting those combinations in Stream returns an
+unsupported-mode error before acquisition starts.
 Empty stages, duplicate conditions for one channel in a stage, disabled/foreign
 channels and more than sixteen stages are rejected.
 
@@ -94,6 +99,13 @@ requested sample count. A probe using production PulseView GUI objects applies,
 saves/restores and acquires a real two-stage sequence. These are bounded
 functional results; they do not calibrate the trigger sample index or input
 threshold, and Linux advanced-trigger hardware testing remains pending.
+
+The standard AND follow-up, prompted by @ljalves's original-application tests,
+passes a two-input truth table and edge/level controls on Windows/WCH. Ten
+production-API cases cover positive/negative conditions, full/sparse masks and
+delayed events in both Buffer and Stream at1 MS/s. Nonempty logic output matches
+independent raw-wire decoding. These bounded cases do not qualify exact trigger
+position, all channel combinations, high-rate integrity or Linux behavior.
 
 The driver also exposes a finite duration limit through libsigrok, but PulseView
 does not provide a separate time-limit control. Its toolbar sets the sample

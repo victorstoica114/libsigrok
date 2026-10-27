@@ -311,6 +311,24 @@ START_TEST(test_qualified_trigger_packets)
 }
 END_TEST
 
+START_TEST(test_standard_multichannel_trigger)
+{
+	uint8_t conditions[32] = {0}, packet[DLA_COMMAND_SIZE] = {0};
+	/* Independently captured standard AND: D24 HIGH and D28 rising, all32,
+	 * with a positive control and both impossible-condition controls. */
+	conditions[24] = 2; conditions[28] = 1;
+	CHECK(dla_channels_config(packet, UINT32_MAX, conditions, 0) == 0);
+	CHECK(packet[9] == 0x12 && packet[10] == 39 && packet[12] == 0);
+	CHECK(get32(packet + 13) == UINT32_MAX);
+	CHECK(packet[41] == 2 && packet[45] == 1);
+	CHECK(packet[49] == 0x0b && get32(packet + 50) == 0xb49399ce);
+	for (unsigned int ch = 0; ch < 32; ch++)
+		if (ch != 24 && ch != 28) CHECK(packet[17 + ch] == 0);
+	conditions[31] = 6;
+	CHECK(dla_channels_config(packet, UINT32_MAX, conditions, 0) < 0);
+}
+END_TEST
+
 Suite *suite_fnirsi_dla32(void)
 {
 	Suite *s;
@@ -325,6 +343,7 @@ Suite *suite_fnirsi_dla32(void)
 	tcase_add_test(tc, test_advanced_parallel_trigger);
 	tcase_add_test(tc, test_trigger_options);
 	tcase_add_test(tc, test_qualified_trigger_packets);
+	tcase_add_test(tc, test_standard_multichannel_trigger);
 	suite_add_tcase(s, tc);
 	return s;
 }
