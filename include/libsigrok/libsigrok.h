@@ -1275,6 +1275,11 @@ enum sr_configkey {
 	/** Human-readable acquisition error; empty for normal completion/Stop. */
 	SR_CONF_CAPTURE_ERROR,
 
+	/** Optional hardware trigger qualifiers/serial selection, a{sv}.
+	 * Default mode retains the ordinary sr_trigger model. LIST describes
+	 * the driver's supported modes/ranges. Proposed extension for review. */
+	SR_CONF_TRIGGER_OPTIONS,
+
 	/* Update sr_key_info_config[] (hwdriver.c) upon changes! */
 };
 

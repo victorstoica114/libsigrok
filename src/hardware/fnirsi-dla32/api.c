@@ -23,6 +23,7 @@
 #endif
 #include "libsigrok-internal.h"
 #include "protocol.h"
+#include "trigger-options.h"
 #include "discovery.h"
 
 #define LOG_PREFIX "fnirsi-dla32"
@@ -81,6 +82,7 @@ struct dev_context {
 	int16_t threshold;
 	gboolean stream, continuous, usb3, logic_only;
 	struct pwm_setting pwm[4];
+	struct dla_trigger_options trigger_options;
 	struct dla_decoder decoder;
 	uint32_t channel_mask;
 	uint64_t run_limit_samples;
@@ -733,6 +735,9 @@ static int config_get(uint32_t key, GVariant **data,
 		return SR_OK;
 	}
 	switch (key) {
+	case SR_CONF_TRIGGER_OPTIONS:
+		*data = dla_trigger_options_get(&devc->trigger_options);
+		return SR_OK;
 	case SR_CONF_SAMPLERATE:
 		*data = g_variant_new_uint64(devc->samplerate);
 		break;
@@ -775,6 +780,7 @@ static int config_set(uint32_t key, GVariant *data,
 {
 	struct dev_context *devc = sdi->priv;
 	struct pwm_setting candidate;
+	struct dla_trigger_options trigger_candidate;
 	uint64_t value;
 	double low, high, number;
 	const char *mode;
@@ -864,6 +870,13 @@ static int config_set(uint32_t key, GVariant *data,
 			devc->limits.limit_samples = 0;
 		}
 		return SR_OK;
+	case SR_CONF_TRIGGER_OPTIONS:
+		if (dla_trigger_options_parse(data, &trigger_candidate) < 0)
+			return SR_ERR_ARG;
+		if (trigger_candidate.mode != DLA_TRIGGER_DEFAULT && devc->stream)
+			return SR_ERR_NA;
+		devc->trigger_options = trigger_candidate;
+		return SR_OK;
 	case SR_CONF_CAPTURE_RATIO:
 		value = g_variant_get_uint64(data);
 		/* Factory UI supports 1..90%; zero does not capture the tested event. */
@@ -887,6 +900,8 @@ static int config_set(uint32_t key, GVariant *data,
 			return SR_OK;
 		}
 		if (!strcmp(mode, device_modes[1])) {
+			if (devc->trigger_options.mode != DLA_TRIGGER_DEFAULT)
+				return SR_ERR_NA;
 			if (!devc->usb3) {
 				sr_err("Experimental Stream mode requires a USB 3 connection.");
 				return SR_ERR_NA;
@@ -897,6 +912,8 @@ static int config_set(uint32_t key, GVariant *data,
 		return SR_ERR_ARG;
 	case SR_CONF_CONTINUOUS:
 		enabled = g_variant_get_boolean(data);
+		if (enabled && devc->trigger_options.mode != DLA_TRIGGER_DEFAULT)
+			return SR_ERR_NA;
 		if (enabled && !devc->usb3) {
 			sr_err("Continuous Stream mode requires a USB 3 connection.");
 			return SR_ERR_NA;
@@ -948,6 +965,9 @@ static int config_list(uint32_t key, GVariant **data,
 		}
 	}
 	switch (key) {
+	case SR_CONF_TRIGGER_OPTIONS:
+		*data = dla_trigger_options_list();
+		return SR_OK;
 	case SR_CONF_SAMPLERATE:
 		if (!sdi)
 			return SR_ERR_ARG;
@@ -1712,15 +1732,26 @@ static int prepare_trigger(const struct sr_dev_inst *sdi,
 	memset(parallel, DLA_ADV_TRIGGER_DISABLED, sizeof(*parallel));
 	parallel->stages = 0;
 	*advanced = FALSE;
-	if (!trigger)
+	if (devc->trigger_options.mode == DLA_TRIGGER_SERIAL) {
+		uint32_t required = (1U << devc->trigger_options.clock) | (1U << devc->trigger_options.data);
+		if (trigger || devc->stream || (enabled_channel_mask(sdi) & required) != required)
+			return SR_ERR_ARG;
+		*advanced = TRUE;
 		return SR_OK;
+	}
+	if (!trigger)
+		return devc->trigger_options.mode == DLA_TRIGGER_PARALLEL ? SR_ERR_ARG : SR_OK;
 	stage_count = g_slist_length(trigger->stages);
 	if (!stage_count || stage_count > DLA_TRIGGER_STAGES) {
 		sr_err("DLA-32 supports one to sixteen trigger stages.");
 		return SR_ERR_NA;
 	}
 	stage = trigger->stages->data;
-	*advanced = stage_count > 1 || g_slist_length(stage->matches) > 1;
+	if (devc->trigger_options.mode == DLA_TRIGGER_PARALLEL &&
+			devc->trigger_options.stages != stage_count)
+		return SR_ERR_ARG;
+	*advanced = devc->trigger_options.mode == DLA_TRIGGER_PARALLEL ||
+		stage_count > 1 || g_slist_length(stage->matches) > 1;
 	if (*advanced && devc->stream) {
 		sr_err("Advanced DLA-32 triggers require Buffer mode.");
 		return SR_ERR_NA;
@@ -1964,7 +1995,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		sr_err("Sample limit exceeds the 4-Gbit Buffer memory for enabled channels.");
 		return SR_ERR_ARG;
 	}
-	has_trigger = sr_session_trigger_get(sdi->session) != NULL;
+	has_trigger = sr_session_trigger_get(sdi->session) != NULL ||
+		devc->trigger_options.mode == DLA_TRIGGER_SERIAL;
 	ret = prepare_trigger(sdi, conditions, &parallel, &advanced);
 	if (ret != SR_OK)
 		return ret;
@@ -2137,8 +2169,15 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		devc->submitted_transfers++;
 	}
 	if (advanced) {
-		ret = dla_parallel_trigger_config(packet, &parallel) < 0 ?
-			SR_ERR_ARG : send_command(sdi, packet);
+		if (devc->trigger_options.mode == DLA_TRIGGER_SERIAL)
+			ret = dla_serial_trigger_config(packet, devc->trigger_options.clock,
+				devc->trigger_options.data, devc->trigger_options.falling,
+				devc->trigger_options.bits, devc->trigger_options.value);
+		else
+			ret = dla_parallel_trigger_config_full(packet, &parallel,
+				devc->trigger_options.mode == DLA_TRIGGER_PARALLEL ? devc->trigger_options.count : NULL,
+				devc->trigger_options.mode == DLA_TRIGGER_PARALLEL ? devc->trigger_options.continuous : NULL);
+		ret = ret < 0 ? SR_ERR_ARG : send_command(sdi, packet);
 		if (ret != SR_OK) {
 			sr_err("Failed to configure the advanced trigger: %s.", sr_strerror(ret));
 			rollback_acquisition((struct sr_dev_inst *)sdi);

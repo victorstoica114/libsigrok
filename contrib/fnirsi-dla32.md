@@ -70,17 +70,15 @@ establish an exact calibrated trigger sample index.
 
 This branch adds Buffer triggers with one to sixteen ordered libsigrok stages
 and multiple enabled physical-channel conditions per stage. Conditions within
-a stage form a parallel AND condition. One stage with one condition retains the
-basic trigger implementation. Advanced combinations require Buffer; selecting
+a stage form a parallel AND condition. An unqualified stage with one condition
+retains the basic trigger implementation. Advanced combinations require Buffer; selecting
 them in Stream returns an unsupported-mode error before acquisition starts.
 Empty stages, duplicate conditions for one channel in a stage, disabled/foreign
 channels and more than sixteen stages are rejected.
 
-The initial implementation uses one occurrence per stage with continuous
-qualification disabled. Configurable per-stage Count/Continuous, serial-match
-triggers and the vendor serial Start/Stop controls remain under investigation.
-The Count field's meaning for level/combined conditions must not be inferred
-from its edge-occurrence behavior.
+Ordinary stages default to one occurrence with continuous qualification disabled.
+Optional Count/Continuous and serial-word matching are described below. Mixed
+conditions and the vendor serial Start/Stop controls remain under investigation.
 
 The separate PulseView `trigger-sequence-editor` branch provides the editor:
 <https://github.com/victorstoica114/pulseview/tree/trigger-sequence-editor>.
@@ -186,7 +184,8 @@ Known limits remain: arbitrary-duration lossless all32 Stream at 50 MS/s /
 200 MB/s is unqualified; high-rate waveform-width deviations remain recorded;
 exact physical trigger position is not qualified and no precise synthetic
 trigger marker is emitted. Advanced parallel stages are experimental in Buffer;
-serial matching and configurable Count/Continuous are not exposed yet.
+serial matching and configurable Count/Continuous are available only on the
+experimental branch described below.
 A large interrupted export failed during temporary-file rename
 (EXP-001), and its cause remains unresolved. No filtering, sample repair,
 empirical duty correction or channel remapping is used to hide these findings.
@@ -194,3 +193,54 @@ empirical duty correction or channel remapping is used to hide these findings.
 PWM settings are commanded/cache state, not electrical readback; their state
 becomes unknown after reopening. Threshold presets have functional validation,
 not calibrated hysteresis/threshold specifications for every channel.
+
+## Experimental trigger options
+
+The `advanced-trigger-buffer` branch additionally proposes
+`SR_CONF_TRIGGER_OPTIONS` (`trigger_options`), using an `a{sv}` dictionary.
+This extends configuration without changing the public `sr_trigger` structures.
+It is a proposed API, separate from the existing upstream PR. Pair it with
+<https://github.com/victorstoica114/pulseview/tree/advanced-trigger-controls>
+for the experimental editor. Existing PulseView builds do not expose these fields.
+
+SET replaces the complete dictionary. GET returns the commanded configuration;
+LIST describes the available modes and bounds. Invalid, unknown, duplicate or
+overflowing fields are rejected without changing the previous configuration.
+The three accepted forms, in GVariant text notation, are:
+
+```
+{'mode': <'default'>}
+{'mode': <'parallel'>, 'stages': <[(uint32 4, false), (1, true)]>}
+{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 18>, 'edge': <'rising'>, 'bits': <uint32 8>, 'value': <uint32 165>}
+```
+
+Default mode retains the normal session trigger model. Parallel mode supplies
+one `(uint32 Count, boolean Continuous)` tuple per ordinary trigger stage, in
+stage order. There must be 1–16 stages and Count must be 1–255. Count is an edge
+occurrence count for edge conditions. For level conditions it is nominal time
+in nanoseconds: Continuous requires uninterrupted matching time, while the
+other setting permits accumulation over separate matching intervals. Mixed
+edge/level qualifiers remain experimental; calibrated timing is not claimed.
+
+Serial mode uses distinct enabled physical logic channels for clock and data,
+a rising/falling clock edge, a width of 1–16 bits and an unsigned value fitting
+that width. It matches the latest sampled bits, MSB first. It does not implement
+SPI chip select, UART framing, a protocol decoder or serial Start/Stop controls.
+The ordinary session trigger must be cleared in serial mode. Serial and qualified
+parallel triggers require Buffer mode; Stream and continuous acquisition reject
+these extensions. Configuration changes are rejected during acquisition.
+
+Windows/WCH hardware checks include rising/falling/either-edge Counts 1–6,
+100/500 ns HIGH and LOW pulses, both Continuous settings, 50/250 MS/s controls,
+SPI words of 1/8/16 bits and both clock edges, an absent-word negative control,
+and a three-channel sparse-mask serial capture. The new public API also passed
+independent raw-to-logic comparison. PulseView's production toolbar/editor
+passed real Count and SPI captures, configuration persistence and Cancel checks.
+Linux validation of these new options is still requested.
+
+Controlled SPI words sent after arming and allowing prehistory were found within
+5–8 samples of the nominal midpoint at 25 MS/s. This does not qualify exact
+trigger position for arbitrary traffic. A previous free-running serial test
+had a positioning discrepancy; its cause remains unresolved. Intermittent
+either-edge Count behavior reported externally was not reproduced in the
+bounded controlled-start series. No FPGA/controller firmware is changed.

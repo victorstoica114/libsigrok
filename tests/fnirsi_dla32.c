@@ -9,6 +9,7 @@
 #include <check.h>
 #include "lib.h"
 #include "../src/hardware/fnirsi-dla32/protocol.h"
+#include "../src/hardware/fnirsi-dla32/trigger-options.h"
 /* Exercise the non-WCH capability profile on every host. */
 #define DLA_WCH_WORKER 0
 #include "../src/hardware/fnirsi-dla32/capabilities.h"
@@ -240,6 +241,76 @@ START_TEST(test_advanced_parallel_trigger)
 }
 END_TEST
 
+START_TEST(test_trigger_options)
+{
+	struct dla_trigger_options cfg, copy, unchanged;
+	GVariant *data, *roundtrip, *canonical;
+	const char *valid[] = {
+		"{'mode': <'default'>}",
+		"{'mode': <'parallel'>, 'stages': <[(uint32 1, false), (255, true)]>}",
+		"{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 18>, 'edge': <'falling'>, 'bits': <uint32 16>, 'value': <uint32 42330>}",
+	};
+	const char *invalid[] = {
+		"{}", "{'mode': <'unknown'>}",
+		"{'mode': <'default'>, 'mode': <'default'>}",
+		"{'mode': <'default'>, 'extra': <true>}",
+		"{'mode': <'parallel'>}",
+		"{'mode': <'parallel'>, 'stages': <[(uint32 0, false)]>}",
+		"{'mode': <'parallel'>, 'stages': <[(uint32 256, true)]>}",
+		"{'mode': <'parallel'>, 'stages': <[(int32 1, true)]>}",
+		"{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 17>, 'edge': <'rising'>, 'bits': <uint32 1>, 'value': <uint32 1>}",
+		"{'mode': <'serial'>, 'clock': <uint32 32>, 'data': <uint32 18>, 'edge': <'rising'>, 'bits': <uint32 1>, 'value': <uint32 1>}",
+		"{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 18>, 'edge': <'either'>, 'bits': <uint32 1>, 'value': <uint32 1>}",
+		"{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 18>, 'edge': <'rising'>, 'bits': <uint32 8>, 'value': <uint32 256>}",
+		"{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 18>, 'edge': <'rising'>, 'bits': <uint32 0>, 'value': <uint32 0>}",
+		"{'mode': <'serial'>, 'clock': <uint32 17>, 'data': <uint32 18>, 'edge': <'rising'>, 'bits': <uint32 17>, 'value': <uint32 0>}",
+	};
+	unsigned int i;
+	for (i = 0; i < ARRAY_SIZE(valid); i++) {
+		data = g_variant_parse(G_VARIANT_TYPE_VARDICT, valid[i], NULL, NULL, NULL);
+		CHECK(data != NULL);
+		CHECK(dla_trigger_options_parse(data, &cfg) == 0);
+		roundtrip = g_variant_ref_sink(dla_trigger_options_get(&cfg));
+		CHECK(dla_trigger_options_parse(roundtrip, &copy) == 0);
+		canonical = g_variant_ref_sink(dla_trigger_options_get(&copy));
+		CHECK(g_variant_equal(roundtrip, canonical));
+		g_variant_unref(data); g_variant_unref(roundtrip); g_variant_unref(canonical);
+	}
+	memset(&unchanged, 0x5a, sizeof(unchanged));
+	for (i = 0; i < ARRAY_SIZE(invalid); i++) {
+		data = g_variant_parse(G_VARIANT_TYPE_VARDICT, invalid[i], NULL, NULL, NULL);
+		CHECK(data != NULL); cfg = unchanged;
+		CHECK(dla_trigger_options_parse(data, &cfg) < 0);
+		CHECK(!memcmp(&cfg, &unchanged, sizeof(cfg)));
+		g_variant_unref(data);
+	}
+	CHECK(dla_trigger_options_parse(NULL, &cfg) < 0);
+}
+END_TEST
+
+START_TEST(test_qualified_trigger_packets)
+{
+	struct dla_parallel_trigger cfg;
+	uint8_t packet[DLA_COMMAND_SIZE], counts[16] = {255}, continuous[16] = {1};
+	memset(&cfg, 2, sizeof(cfg)); cfg.stages = 1; cfg.conditions[0][28] = 1;
+	CHECK(dla_parallel_trigger_config_full(packet, &cfg, counts, continuous) == 0);
+	CHECK(packet[9 + 0x10] == 1 && packet[9 + 0x20] == 255);
+	CHECK(packet[9 + 0x21] == 0 && packet[9 + 0x11] == 0);
+	counts[0] = 0;
+	CHECK(dla_parallel_trigger_config_full(packet, &cfg, counts, continuous) < 0);
+	counts[0] = 1; continuous[0] = 2;
+	CHECK(dla_parallel_trigger_config_full(packet, &cfg, counts, continuous) < 0);
+	CHECK(dla_serial_trigger_config(packet, 17, 18, 1, 16, 0xa55a) == 0);
+	CHECK(packet[12] == 1 && packet[13] == 1);
+	CHECK(packet[15] == 17 && packet[16] == 18 && packet[17] == 15);
+	CHECK(packet[19] == 0x5a && packet[20] == 0xa5);
+	CHECK(packet[9 + 0x30] == 0x22 && packet[9 + 0x12f] == 0x22);
+	CHECK(dla_serial_trigger_config(packet, 17, 17, 0, 8, 0xa5) < 0);
+	CHECK(dla_serial_trigger_config(packet, 17, 18, 2, 8, 0xa5) < 0);
+	CHECK(dla_serial_trigger_config(packet, 17, 18, 0, 8, 0x100) < 0);
+}
+END_TEST
+
 Suite *suite_fnirsi_dla32(void)
 {
 	Suite *s;
@@ -252,6 +323,8 @@ Suite *suite_fnirsi_dla32(void)
 	tcase_add_test(tc, test_pwm_dc_endpoints);
 	tcase_add_test(tc, test_portable_controls);
 	tcase_add_test(tc, test_advanced_parallel_trigger);
+	tcase_add_test(tc, test_trigger_options);
+	tcase_add_test(tc, test_qualified_trigger_packets);
 	suite_add_tcase(s, tc);
 	return s;
 }

@@ -269,6 +269,8 @@ static struct sr_key_info sr_key_info_config[] = {
 		"Capture status", "Host acquisition outcome; does not certify waveform integrity"},
 	{SR_CONF_CAPTURE_ERROR, SR_T_STRING, "capture_error",
 		"Capture error", "Reason the acquisition could not finish normally"},
+	{SR_CONF_TRIGGER_OPTIONS, SR_T_KEYVALUE, "trigger_options",
+		"Hardware trigger options", "Optional trigger qualifiers and serial matching"},
 	ALL_ZERO
 };
 

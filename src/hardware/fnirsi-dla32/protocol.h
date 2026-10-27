@@ -82,15 +82,15 @@ struct dla_setup_config {
 
 /* Advanced parallel commands use a different condition encoding than 0x12:
  * LOW/HIGH/disabled/rising/falling/either = 0..5. Count is an occurrence
- * count for the tested edge conditions; continuous semantics remain pending.
+ * count for edges; for levels it is nominal ns, optionally uninterrupted.
  */
 struct dla_parallel_trigger {
 	uint8_t stages;
 	uint8_t conditions[DLA_TRIGGER_STAGES][DLA_CHANNELS];
 };
 
-static inline int dla_parallel_trigger_config(uint8_t *out,
-	const struct dla_parallel_trigger *cfg)
+static inline int dla_parallel_trigger_config_full(uint8_t *out,
+	const struct dla_parallel_trigger *cfg, const uint8_t *counts, const uint8_t *continuous)
 {
 	uint8_t body[304] = { 0x13, 0x2f, 0x01 };
 	unsigned int stage, pair, high, low;
@@ -99,8 +99,13 @@ static inline int dla_parallel_trigger_config(uint8_t *out,
 		return -1;
 	body[9] = cfg->stages;
 	for (stage = 0; stage < DLA_TRIGGER_STAGES; stage++) {
-		/* One occurrence per stage; do not expose unqualified extensions. */
+		/* Legacy stages default to one occurrence and no continuous qualifier. */
 		body[0x20 + stage] = stage < cfg->stages ? 1 : 0;
+		if (stage < cfg->stages) {
+			if ((counts && !counts[stage]) || (continuous && continuous[stage] > 1)) return -1;
+			if (counts) body[0x20 + stage] = counts[stage];
+			if (continuous) body[0x10 + stage] = continuous[stage];
+		}
 		for (pair = 0; pair < DLA_CHANNELS / 2; pair++) {
 			high = low = DLA_ADV_TRIGGER_DISABLED;
 			if (stage < cfg->stages) {
@@ -112,6 +117,26 @@ static inline int dla_parallel_trigger_config(uint8_t *out,
 			body[0x30 + stage * 16 + pair] = (high << 4) | low;
 		}
 	}
+	dla_packet(out, body, sizeof(body));
+	return 0;
+}
+
+static inline int dla_parallel_trigger_config(uint8_t *out, const struct dla_parallel_trigger *cfg)
+{
+	return dla_parallel_trigger_config_full(out, cfg, NULL, NULL);
+}
+
+static inline int dla_serial_trigger_config(uint8_t *out, unsigned int clock,
+	unsigned int data, unsigned int falling, unsigned int bits, unsigned int value)
+{
+	uint8_t body[304] = {0x13, 0x2f, 0x01, 0x01};
+	if (!out || clock >= 32 || data >= 32 || clock == data || falling > 1 ||
+			!bits || bits > 16 || value >= (1U << bits)) return -1;
+	body[4] = falling; body[6] = clock; body[7] = data; body[8] = bits - 1;
+	body[9] = 1;
+	dla_put16(body + 10, value);
+	body[0x20] = 1;
+	memset(body + 0x30, 0x22, 256);
 	dla_packet(out, body, sizeof(body));
 	return 0;
 }
