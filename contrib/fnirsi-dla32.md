@@ -1,7 +1,7 @@
 # FNIRSI DLA-32 Plus
 
 The `fnirsi-dla32` driver provides 32 physical logic inputs, Buffer and Stream
-acquisition, supported single-stage trigger conditions, adjustable threshold and
+acquisition, basic and advanced parallel trigger conditions, adjustable threshold and
 four independent PWM output groups. Channel names/indices follow the physical
 inputs. Sparse-channel packing does not renumber enabled physical inputs.
 
@@ -65,6 +65,37 @@ commands use libusb directly and do not require the FNIRSI application.
 The device configuration popup offers the Buffer pre-trigger capture ratio
 (1-90%) on either transport. The ratio is a hardware setting; it does not
 establish an exact calibrated trigger sample index.
+
+### Experimental advanced parallel trigger branch
+
+This branch adds Buffer triggers with one to sixteen ordered libsigrok stages
+and multiple enabled physical-channel conditions per stage. Conditions within
+a stage form a parallel AND condition. One stage with one condition retains the
+basic trigger implementation. Advanced combinations require Buffer; selecting
+them in Stream returns an unsupported-mode error before acquisition starts.
+Empty stages, duplicate conditions for one channel in a stage, disabled/foreign
+channels and more than sixteen stages are rejected.
+
+The initial implementation uses one occurrence per stage with continuous
+qualification disabled. Configurable per-stage Count/Continuous, serial-match
+triggers and the vendor serial Start/Stop controls remain under investigation.
+The Count field's meaning for level/combined conditions must not be inferred
+from its edge-occurrence behavior.
+
+The separate PulseView `trigger-sequence-editor` branch provides the editor:
+<https://github.com/victorstoica114/pulseview/tree/trigger-sequence-editor>.
+It supports stage/condition editing and setup save/restore. Existing sigrok
+applications can also construct the sequence using the ordinary trigger API.
+This experimental branch is separate from the current upstream driver PR.
+
+Windows/WCH validation includes the core/C++ tests, additional actual-driver
+mapping/lifecycle probes, positive/impossible-condition cases, two/sixteen
+stages, sparse masks and independent raw-byte conversion. Five voltage-gated
+cases wait without data before a controlled input event, then complete their
+requested sample count. A probe using production PulseView GUI objects applies,
+saves/restores and acquires a real two-stage sequence. These are bounded
+functional results; they do not calibrate the trigger sample index or input
+threshold, and Linux advanced-trigger hardware testing remains pending.
 
 The driver also exposes a finite duration limit through libsigrok, but PulseView
 does not provide a separate time-limit control. Its toolbar sets the sample
@@ -154,8 +185,9 @@ fragmentation across USB read boundaries and output bounds.
 Known limits remain: arbitrary-duration lossless all32 Stream at 50 MS/s /
 200 MB/s is unqualified; high-rate waveform-width deviations remain recorded;
 exact physical trigger position is not qualified and no precise synthetic
-trigger marker is emitted. Advanced multi-stage/serial triggering is not
-implemented. A large interrupted export failed during temporary-file rename
+trigger marker is emitted. Advanced parallel stages are experimental in Buffer;
+serial matching and configurable Count/Continuous are not exposed yet.
+A large interrupted export failed during temporary-file rename
 (EXP-001), and its cause remains unresolved. No filtering, sample repair,
 empirical duty correction or channel remapping is used to hide these findings.
 
